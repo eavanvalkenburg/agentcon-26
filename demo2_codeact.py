@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import warnings
 from typing import Annotated, Any, Literal
+
+warnings.filterwarnings("ignore", message=".*experimental.*", category=Warning)
 
 from agent_framework import Agent, tool
 from agent_framework.devui import serve
 from agent_framework.foundry import FoundryChatClient
 from agent_framework.hyperlight import HyperlightCodeActProvider
+from agent_framework.observability import configure_otel_providers
 from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 
 load_dotenv()
+logging.getLogger("opentelemetry").setLevel(logging.ERROR)
+logging.getLogger("agent_framework").setLevel(logging.INFO)
+logger = logging.getLogger("agent_framework.demo.codeact")
+configure_otel_providers()
+
+# Demo input to paste in DevUI: Use code to fetch the users table, count admins, and calculate 37 * 42.
 
 
 @tool(approval_mode="never_require")
@@ -23,6 +34,7 @@ def compute(
     b: Annotated[float, "Second number."],
 ) -> float:
     """Perform a math operation inside the sandbox."""
+    logger.info("CodeAct compute tool called", extra={"operation": operation})
     operations = {
         "add": a + b,
         "subtract": a - b,
@@ -37,6 +49,7 @@ async def fetch_data(
     table: Annotated[str, "Table name to fetch: users or products."],
 ) -> list[dict[str, Any]]:
     """Fetch sample data inside the sandbox."""
+    logger.info("CodeAct fetch_data tool called", extra={"table": table})
     await asyncio.sleep(0.2)
     data = {
         "users": [
@@ -53,7 +66,6 @@ async def fetch_data(
 
 
 def main() -> None:
-
     agent = Agent(
         client=FoundryChatClient(
             project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
@@ -74,6 +86,7 @@ def main() -> None:
     )
 
     print("Starting CodeAct DevUI on http://localhost:8091")
+    logger.info("Starting CodeAct DevUI", extra={"port": 8091})
     serve(entities=[agent], port=8091, auto_open=True, auth_enabled=False)
 
 

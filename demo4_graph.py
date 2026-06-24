@@ -1,17 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import sys
+import warnings
 from dataclasses import dataclass
+
+warnings.filterwarnings("ignore", message=".*experimental.*", category=Warning)
 
 from agent_framework import Agent, Executor, WorkflowBuilder, WorkflowContext, handler
 from agent_framework.foundry import FoundryChatClient
+from agent_framework.observability import configure_otel_providers, get_tracer
 from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 from typing_extensions import Never
 
 load_dotenv()
+configure_otel_providers()
+sys.stdout.reconfigure(encoding="utf-8")
+logger = logging.getLogger("demo4_graph")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not logger.handlers:
+    log_handler = logging.StreamHandler(sys.stdout)
+    log_handler.setFormatter(
+        logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
+    )
+    logger.addHandler(log_handler)
+tracer = get_tracer("agent-framework-demo")
 
+# Demo topic: Reinforcement learning for AI Agents.
 DEFAULT_TOPIC = "Reinforcement learning for AI Agents."
 
 RESEARCHER_INSTRUCTIONS = """\
@@ -50,9 +69,11 @@ class ResearchExecutor(Executor):
     async def handle(
         self, topic: str, ctx: WorkflowContext[BriefingState, str]
     ) -> None:
+        logger.info("Researcher started")
         response = await self.agent.run(
             f"Research this briefing topic and return concise notes: {topic}"
         )
+        logger.info("Researcher completed")
         await ctx.send_message(BriefingState(topic=topic, research=response.text))
 
 
@@ -65,11 +86,13 @@ class WriterExecutor(Executor):
     async def handle(
         self, state: BriefingState, ctx: WorkflowContext[BriefingState, str]
     ) -> None:
+        logger.info("Writer started")
         response = await self.agent.run(
             "Write the briefing from these research notes.\n\n"
             f"Topic: {state.topic}\n\nResearch notes:\n{state.research}"
         )
         state.draft = response.text
+        logger.info("Writer completed")
         await ctx.send_message(state)
 
 
@@ -82,11 +105,13 @@ class ReviewerExecutor(Executor):
     async def handle(
         self, state: BriefingState, ctx: WorkflowContext[BriefingState, str]
     ) -> None:
+        logger.info("Reviewer started")
         response = await self.agent.run(
             "Review this briefing draft (using the provided research) and suggest concrete improvements.\n\n"
             f"Topic: {state.topic}\n\nDraft:\n{state.draft}\n\nResearch: \n{state.research}"
         )
         state.review = response.text
+        logger.info("Reviewer completed")
         await ctx.send_message(state)
 
 
@@ -99,49 +124,60 @@ class FinalWriterExecutor(Executor):
     async def handle(
         self, state: BriefingState, ctx: WorkflowContext[Never, str]
     ) -> None:
+        logger.info("Final writer started")
         response = await self.agent.run(
             "Use this feedback and the original research and your draft to create a final version:"
             f"Topic: {state.topic}\n\nFeedback: \n{state.review}\n\nDraft:\n{state.draft}\n\nResearch: \n{state.research}"
         )
+        logger.info("Final writer completed")
         await ctx.yield_output(
             f"# Graph workflow briefing\n\n##Final: \n{response.text}\n\n## Research\n{state.research}"
         )
 
 
 async def main() -> None:
-    client = FoundryChatClient(
-        project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-        model=os.environ["FOUNDRY_MODEL"],
-        credential=AzureCliCredential(),
-    )
-
-    researcher_agent = Agent(
-        client=client, name="researcher", instructions=RESEARCHER_INSTRUCTIONS
-    )
-    writer_agent = Agent(client=client, name="writer", instructions=WRITER_INSTRUCTIONS)
-    reviewer_agent = Agent(
-        client=client, name="reviewer", instructions=REVIEWER_INSTRUCTIONS
-    )
-
-    researcher = ResearchExecutor(researcher_agent)
-    writer = WriterExecutor(writer_agent)
-    reviewer = ReviewerExecutor(reviewer_agent)
-    final_writer = FinalWriterExecutor(writer_agent)
-
-    workflow = (
-        WorkflowBuilder(
-            name="Briefing graph",
-            description="Explicit researcher -> writer -> reviewer -> final writer graph workflow.",
-            start_executor=researcher,
+    with tracer.start_as_current_span("Demo 4 - Graph workflow") as span:
+        span.set_attribute("demo.number", 4)
+        span.set_attribute("demo.name", "Graph workflow")
+        logger.info("Building graph workflow")
+        client = FoundryChatClient(
+            project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+            model=os.environ["FOUNDRY_MODEL"],
+            credential=AzureCliCredential(),
         )
-        .add_edge(researcher, writer)
-        .add_edge(writer, reviewer)
-        .add_edge(reviewer, final_writer)
-        .build()
-    )
-    events = await workflow.run(DEFAULT_TOPIC)
-    outputs = events.get_outputs()
-    print(outputs[-1] if outputs else "No graph workflow output was produced.")
+
+        researcher_agent = Agent(
+            client=client, name="researcher", instructions=RESEARCHER_INSTRUCTIONS
+        )
+        writer_agent = Agent(
+            client=client, name="writer", instructions=WRITER_INSTRUCTIONS
+        )
+        reviewer_agent = Agent(
+            client=client, name="reviewer", instructions=REVIEWER_INSTRUCTIONS
+        )
+
+        researcher = ResearchExecutor(researcher_agent)
+        writer = WriterExecutor(writer_agent)
+        reviewer = ReviewerExecutor(reviewer_agent)
+        final_writer = FinalWriterExecutor(writer_agent)
+
+        workflow = (
+            WorkflowBuilder(
+                name="Briefing graph",
+                description="Explicit researcher -> writer -> reviewer -> final writer graph workflow.",
+                start_executor=researcher,
+                output_from=[final_writer],
+            )
+            .add_edge(researcher, writer)
+            .add_edge(writer, reviewer)
+            .add_edge(reviewer, final_writer)
+            .build()
+        )
+        logger.info("Running graph workflow for topic: %s", DEFAULT_TOPIC)
+        events = await workflow.run(DEFAULT_TOPIC)
+        logger.info("Graph workflow completed")
+        outputs = events.get_outputs()
+        print(outputs[-1] if outputs else "No graph workflow output was produced.")
 
 
 if __name__ == "__main__":
