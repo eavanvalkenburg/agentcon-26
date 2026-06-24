@@ -1,0 +1,42 @@
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Virtual environments and local dependency caches
+.venv/
+.venv-*/
+venv/
+env/
+.uv-cache/
+
+# Python caches and build output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyrefly/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Demo runtime state, memory, and local hosting/session storage
+agent-file-memory/
+memory/
+working/
+storage/
+.host-state/
+.ruff_cache/
+
+# Local vendored experiments
+vendor/
+
+# Logs and editor/OS noise
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
