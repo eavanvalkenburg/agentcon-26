@@ -25,6 +25,7 @@ RESEARCHER_INSTRUCTIONS = """\
 You are the researcher for a briefing team.
 Find the key facts, audience needs, risks, and demo angles for the requested topic.
 Return concise notes with useful evidence and practical implications.
+Focus on a top 5 relevant, recent papers.
 """
 
 WRITER_INSTRUCTIONS = """\
@@ -46,12 +47,12 @@ async def main() -> None:
         span.set_attribute("demo.name", "Functional workflow")
         client = FoundryChatClient(
             project_endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-            model=os.environ["FOUNDRY_MODEL"],
+            model=os.environ["FOUNDRY_QUARANTINE_MODEL"],
             credential=AzureCliCredential(),
         )
 
         researcher = Agent(
-            client=client, name="researcher", instructions=RESEARCHER_INSTRUCTIONS
+            client=client, name="researcher", instructions=RESEARCHER_INSTRUCTIONS, tools=FoundryChatClient.get_web_search_tool()
         )
         writer = Agent(client=client, name="writer", instructions=WRITER_INSTRUCTIONS)
         reviewer = Agent(
@@ -60,30 +61,35 @@ async def main() -> None:
 
         @workflow
         async def briefing_workflow(requested_topic: str) -> str:
+            print(f"Starting research about {requested_topic}...")
             research = (
                 await researcher.run(
                     f"Research this briefing topic and return concise notes: {requested_topic}"
                 )
             ).text
+            print("Research complete, starting writing...")
             draft = (
                 await writer.run(
                     "Write the briefing from these research notes.\n\n"
                     f"Topic: {requested_topic}\n\nResearch notes:\n{research}"
                 )
             ).text
+            print("Writing complete, starting review...")
             review = (
                 await reviewer.run(
                     "Review this briefing draft (using the provided research) and suggest concrete improvements.\n\n"
                     f"Topic: {requested_topic}\n\nDraft:\n{draft}\n\nResearch: \n{research}"
                 )
             ).text
+            print("Review complete, starting final write...")
             final = (
                 await writer.run(
                     messages="Use this feedback and the original research and your draft to create a final version:"
                     f"Topic: {requested_topic}\n\nFeedback: \n{review}\n\nDraft:\n{draft}\n\nResearch: \n{research}"
                 )
             ).text
-            return f"# Functional workflow briefing\n\n##Final: \n{final}\n\n## Research\n{research}"
+            print("Final write complete, returning...")
+            return f"# Task: {requested_topic}\n\n##Result: \n{final}"
 
         result = await briefing_workflow.run(DEFAULT_TOPIC)
         print(result.get_outputs()[0])
